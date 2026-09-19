@@ -19,7 +19,7 @@ set -euo pipefail
 REGION="us-central1"                 # Region de GCP
 REPOSITORY="agentic-ai"              # Nombre del repositorio en Artifact Registry
 SERVICE="assistant-base-01"          # Nombre del servicio (y de la imagen)
-PROJECT_ID="project-effb6f9a-6f21-4320-bf0"         # ID del proyecto de GCP
+PROJECT_ID="mi-proyecto-gcp"         # ID del proyecto de GCP
 
 # Version generada segun el dia y la hora: YYYYMMDD-HHMMSS
 VERSION="$(date +%Y%m%d-%H%M%S)"
