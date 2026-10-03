@@ -1,11 +1,121 @@
-# 03_agent_skills
+# 04_agent_hooks
 
-Backend del curso **Agentes de IA** que extiende `02_agent_tools_mcp` (agente
-con tools locales, retrieval en Qdrant y MCP de Neon) con el patrón **Skills**
-de LangChain: el agente descubre y carga bajo demanda procedimientos
-especializados (*progressive disclosure*).
+Backend del curso **Agentes de IA** que extiende `03_agent_skills` (agente con
+tools locales, retrieval en Qdrant, MCP de Neon y skills) con **hooks**: código
+propio que se ejecuta en puntos concretos del ciclo del agente, usando el
+*middleware* de LangChain.
 
 ---
+
+## Hooks
+
+Un hook es una función que LangChain ejecuta automáticamente en un momento fijo
+del ciclo del agente, sin tocar el prompt ni las tools. Sirven para observar
+(logs, métricas) y para controlar el flujo (por ejemplo, cortar la ejecución).
+
+| Hook                | Decorador       | Nivel  | Cuándo corre                                  |
+|---------------------|-----------------|--------|-----------------------------------------------|
+| `pre_agent_hook`    | `@before_agent` | Agente | 1 vez al inicio de cada invocación            |
+| `pre_model_hook`    | `@before_model` | Modelo | Antes de **cada** llamada al LLM              |
+| `post_model_hook`   | `@after_model`  | Modelo | Después de **cada** respuesta del LLM         |
+| `post_agent_hook`   | `@after_agent`  | Agente | 1 vez al terminar la invocación               |
+
+Ciclo de ejecución (el bucle modelo → tools se repite hasta la respuesta final):
+
+```
+before_agent ─▶ [ before_model ─▶ LLM ─▶ after_model ─▶ tools ]* ─▶ after_agent
+```
+
+Están en `src/services/hooks.py` y se registran en `build_agent`
+(`src/services/agent_service.py`) con `create_agent(..., middleware=HOOKS)`.
+Todos escriben en el log en formato JSON, como el resto del API.
+
+### Estado compartido: `HooksState`
+
+Los hooks se comunican entre sí mediante `HooksState`, un estado que extiende
+`AgentState` con tres campos opcionales (`NotRequired`, porque no existen al
+inicio de la invocación):
+
+| Campo         | Tipo        | Para qué sirve                                   |
+|---------------|-------------|--------------------------------------------------|
+| `started_at`  | `float`     | Hora de inicio, para calcular la duración total  |
+| `model_calls` | `int`       | Cuántas veces se llamó al modelo                 |
+| `tools_called`| `list[str]` | Tools que el modelo fue pidiendo                 |
+
+Cuando un hook devuelve un diccionario, sus claves se mezclan con el estado; si
+devuelve `None`, no cambia nada.
+
+### `pre_agent_hook` (`@before_agent`)
+
+Corre **una vez** al inicio de cada invocación.
+
+- Busca el último `HumanMessage` (la pregunta actual) y registra la pregunta y
+  cuántos mensajes llegaron, incluido el historial.
+- Inicializa el estado: `started_at = time.time()`, `model_calls = 0` y
+  `tools_called = []`. Es importante porque los demás hooks leen esos campos;
+  sin esto, el contador no arrancaría en cero en cada invocación.
+
+### `pre_model_hook` (`@before_model(can_jump_to=["end"])`)
+
+Corre **antes de cada llamada al LLM**. Si la pregunta usa una tool, corre dos
+veces.
+
+1. Calcula `model_calls + 1` y lo registra junto con el número de mensajes que
+   se enviarán al modelo.
+2. Si el valor supera `MAX_MODEL_CALLS` (variable de entorno, 10 por defecto),
+   devuelve:
+   - un `AIMessage` con "No pude completar la solicitud: se alcanzó el límite de
+     pasos", y
+   - `jump_to: "end"`, que salta al final sin llamar al modelo.
+3. Si no lo supera, guarda el nuevo `model_calls` en el estado.
+
+`can_jump_to=["end"]` declara que este hook puede cortar la ejecución; sin esa
+declaración, LangChain no acepta el `jump_to`. Sirve para que un bucle de tools
+no se descontrole y consuma tokens sin fin (control de flujo básico, no
+seguridad).
+
+### `post_model_hook` (`@after_model`)
+
+Corre **después de cada respuesta del LLM**, antes de ejecutar las tools que
+haya pedido.
+
+- Toma el último mensaje del estado, que es la respuesta del modelo
+  (`AIMessage`).
+- Registra los tokens de entrada y salida de esa llamada (`usage_metadata`) y
+  los nombres de las tools que pidió (`tool_calls`).
+- Si pidió tools, las agrega a `tools_called`; si no, devuelve `None` y no toca
+  el estado.
+
+Con una pregunta que usa una tool, corre dos veces: la primera registra que el
+modelo pidió la tool y la segunda que ya no pidió ninguna (dio la respuesta
+final).
+
+### `post_agent_hook` (`@after_agent`)
+
+Corre **una vez** cuando el agente termina, con el estado final. Registra un
+resumen de toda la invocación: duración (a partir de `started_at`), llamadas al
+modelo, tools usadas y largo de la respuesta final. Solo observa, por eso
+devuelve `None`. También corre cuando `pre_model_hook` cortó la ejecución, así
+que el resumen aparece siempre.
+
+### Orden de ejecución
+
+```
+pre_agent → pre_model → LLM → post_model → tools → pre_model → LLM → post_model → post_agent
+```
+
+Con varios middleware en la lista, los `before_*` corren en el orden de la
+lista y los `after_*` en orden inverso.
+
+> Estos hooks son de observabilidad y control de flujo básico; no son un
+> esquema de seguridad.
+
+**Agregar un hook nuevo:** define una función con el decorador correspondiente
+y agrégala a la lista `HOOKS`.
+
+---
+
+# Skills (heredado de `03_agent_skills`)
 
 ## Skills
 

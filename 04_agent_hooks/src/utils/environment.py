@@ -20,3 +20,6 @@ NEON_API_KEY: str = config("NEON_API_KEY", default=None)
 NEON_PROJECT_ID: str = config("NEON_PROJECT_ID", default=None)
 
 HISTORY_LIMIT: int = config("HISTORY_LIMIT", default=10, cast=int)
+
+# Hooks: máximo de llamadas al modelo por invocación del agente
+MAX_MODEL_CALLS: int = config("MAX_MODEL_CALLS", default=10, cast=int)

@@ -16,6 +16,7 @@ from src.utils.environment import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
 )
+from src.services.hooks import HOOKS
 from src.services.prompts import SYSTEM_PROMPT
 
 logger = get_logger(__name__)
@@ -31,8 +32,10 @@ def build_agent(tools: list):
         model=_llm,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        middleware=HOOKS,
     )
     logger.info("Agente creado con %d tool(s): %s", len(tools), [t.name for t in tools])
+    logger.info("Hooks registrados: %s", [h.name for h in HOOKS])
     return agent
 
 class AgentService:
