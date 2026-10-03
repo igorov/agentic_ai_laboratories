@@ -9,10 +9,10 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-async def handle_chat(question: str, user: str, session_id: str, db: Session) -> ChatResponse:
+async def handle_chat(question: str, user: str, session_id: str, db: Session, agent) -> ChatResponse:
     # Instanciamos las clases concretas y las inyectamos en el servicio
     repository = HistoryRepositoryImpl(db)
-    service = AgentService(repository)
+    service = AgentService(repository, agent)
 
     try:
         result = await service.chat(question=question, user=user, session_id=session_id)

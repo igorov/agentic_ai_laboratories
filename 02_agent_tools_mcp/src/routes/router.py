@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from src.controllers.chat_controller import handle_chat
@@ -10,12 +10,13 @@ from src.dto.api_entities import ChatRequest, ChatResponse, HistoryItem, UserSes
 chat_router = APIRouter()
 
 @chat_router.post("/api/chat", response_model=ChatResponse, tags=["chat"])
-async def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
+async def chat(request: ChatRequest, http_request: Request, db: Session = Depends(get_db)) -> ChatResponse:
     return await handle_chat(
         question=request.question,
         user=request.user,
         session_id=request.session_id,
         db=db,
+        agent=http_request.app.state.agent
     )
 
 @chat_router.get("/api/history/{session_id}", response_model=List[HistoryItem], tags=["history"])
