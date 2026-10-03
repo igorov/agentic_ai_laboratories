@@ -58,6 +58,7 @@ class AgentService:
             history_messages.append(HumanMessage(content=record.question))
             history_messages.append(AIMessage(content=record.answer))
 
+        # Invocar el agente
         agent_response = await self._agent.ainvoke(
             {"messages": [*history_messages, HumanMessage(content=question)]}
         )
