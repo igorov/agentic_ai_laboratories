@@ -1,8 +1,52 @@
-# assistant_base_01
+# 03_agent_skills
 
-Backend base del curso **Agentes de IA**: un esqueleto limpio y por capas sobre
-el que se construye, paso a paso, un asistente conversacional con IA. Es el
-punto de partida (el más sencillo) de la serie de backends del repositorio.
+Backend del curso **Agentes de IA** que extiende `02_agent_tools_mcp` (agente
+con tools locales, retrieval en Qdrant y MCP de Neon) con el patrón **Skills**
+de LangChain: el agente descubre y carga bajo demanda procedimientos
+especializados (*progressive disclosure*).
+
+---
+
+## Skills
+
+Una skill es un conjunto de instrucciones especializadas que el agente no
+recibe en el system prompt, sino que carga solo cuando las necesita. Así el
+contexto inicial se mantiene pequeño aunque existan muchas skills.
+
+Están definidas en `src/services/skills.py`:
+
+```python
+class Skill(TypedDict):
+    name: str         # identificador único
+    description: str  # 1-2 frases, lo que ve el agente al listar
+    content: str      # instrucciones completas (markdown)
+```
+
+El agente las usa con dos tools:
+
+| Tool                     | Qué hace                                            |
+|--------------------------|-----------------------------------------------------|
+| `list_skills()`          | Devuelve el nombre y la descripción de cada skill.  |
+| `load_skill(skill_name)` | Devuelve el contenido completo de una skill.        |
+
+Skills incluidas:
+
+- `ficha_matricula`: datos, validaciones y plantilla para matricular a un
+  alumno en un programa.
+- `solicitud_certificado`: requisitos, datos y plantilla para pedir un
+  certificado de aprobación o una constancia de estudios.
+
+Flujo: el usuario pide un trámite → el agente llama a `list_skills` → elige la
+skill y llama a `load_skill` → sigue sus instrucciones (incluido usar
+`retrieve_documents` para validar el programa) → devuelve la ficha o
+solicitud para que el usuario la confirme.
+
+> El historial que se reenvía al agente solo guarda preguntas y respuestas,
+> no los resultados de las tools. Por eso el system prompt le pide volver a
+> cargar la skill en cada turno de un trámite en curso.
+
+**Agregar una skill nueva:** agrega un diccionario `Skill` a la lista `SKILLS`.
+No hace falta tocar las tools ni el prompt.
 
 ---
 

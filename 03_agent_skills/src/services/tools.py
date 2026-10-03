@@ -5,6 +5,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import QdrantVectorStore
 
+from src.services.skills import SKILL_TOOLS
 from src.utils.environment import (
     NEON_API_KEY,
     OPENAI_API_KEY,
@@ -74,7 +75,7 @@ def retrieve_documents(query: str, k: int = 4) -> Tuple[str, List[Dict[str, Any]
     return content, contexts
 
 
-LOCAL_TOOLS = [get_weather, retrieve_documents]
+LOCAL_TOOLS = [get_weather, retrieve_documents, *SKILL_TOOLS]
 
 
 async def load_neon_tools() -> Tuple[list, object | None]:
