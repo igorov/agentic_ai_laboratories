@@ -15,15 +15,17 @@ class AgentService:
 
     async def chat(self, question: str, user: str, session_id: Optional[UUID]) -> ChatResponse:
         logger.info(f"Pregunta entrante de {user}: {question}")
-        session_id=session_id or uuid4()
+        session_id = session_id or uuid4()
 
         response = "Respuesta generada por el agente"  # Aquí iría la lógica para generar la respuesta del agente
         logger.info(f"Respuesta a la pregunta: {response}")
 
         # Guardar la interacción en la base de datos
         # Guardar el historial de la conversación en la base de datos
+        trace_id = uuid4()
+        
         historyDTO = HistoryDTO(
-            trace_id=uuid4(),
+            trace_id=trace_id,
             session_id=session_id,
             question=question,
             answer=response,
@@ -35,5 +37,5 @@ class AgentService:
             user=user,
             answer=response,
             session_id=session_id or uuid4(),
-            trace_id=uuid4(),
+            trace_id=trace_id,
         )
