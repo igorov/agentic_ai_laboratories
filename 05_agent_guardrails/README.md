@@ -1,11 +1,110 @@
-# 04_agent_hooks
+# 05_agent_guardrails
 
-Backend del curso **Agentes de IA** que extiende `03_agent_skills` (agente con
-tools locales, retrieval en Qdrant, MCP de Neon y skills) con **hooks**: código
-propio que se ejecuta en puntos concretos del ciclo del agente, usando el
-*middleware* de LangChain.
+Backend del curso **Agentes de IA** que extiende `04_agent_hooks` (agente con
+tools locales, retrieval en Qdrant, MCP de Neon, skills y hooks) con
+**guardrails de entrada**: un pipeline de 8 capas de seguridad que valida cada
+mensaje del usuario **antes** de que llegue al agente, usando el *middleware*
+de LangChain.
 
 ---
+
+## Guardrails
+
+Cada capa es un `AgentMiddleware` con un hook `before_agent`. Las capas corren
+en orden estricto 1 → 8. Si una detecta un problema, devuelve un `AIMessage` con
+el mensaje de rechazo y `jump_to: "end"`, de modo que **ni las capas
+siguientes ni el LLM se ejecutan**. El rechazo llega al usuario como una
+respuesta normal del chat (HTTP 200) y se guarda en el historial.
+
+```
+mensaje ─▶ C1 ─▶ C2 ─▶ C3 ─▶ C4 ─▶ C5 ─▶ C6 ─▶ C7 ─▶ C8 ─▶ agente (hooks + LLM + tools)
+            │     │     │     │     │     │     │     │
+            └─────┴─────┴─────┴──┬──┴─────┴─────┴─────┘
+                                 ▼
+                     bloqueo (jump_to: "end")
+```
+
+| # | Capa                 | Archivo (`src/services/guardrails/`) | Técnica                            | Configuración (`config/guardrails/`) |
+|---|----------------------|--------------------------------------|------------------------------------|--------------------------------------|
+| 1 | Secret keys          | `layer1_secrets.py`                  | REGEX (API keys, tokens, JWT)      | — (patrones en código)               |
+| 2 | Prompt injection     | `layer2_prompt_injection.py`         | REGEX ES/EN por categorías         | `prompt_injection_patterns.yaml`     |
+| 3 | Toxicidad            | `layer3_toxicity.py`                 | REGEX; mensaje de contención para autolesión | `toxicity_patterns.yaml`   |
+| 4 | Reglas de negocio    | `layer4_custom_regex.py`             | librería `regex` con timeout (anti-ReDoS) | `custom_patterns.yaml`        |
+| 5 | PII                  | `layer5_pii.py`                      | Presidio + spaCy (`es_core_news_sm`), con respaldo REGEX local; estrategia `block` / `mask` / `off` por entidad | `pii_strategies.yaml` |
+| 6 | URLs / phishing      | `layer6_url_filter.py`               | REGEX (URLs con y sin protocolo, acortadores) | `url_blocklist.yaml`      |
+| 7 | Llama Prompt Guard 2 | `layer7_prompt_guard.py`             | Clasificador vía Groq (BENIGN / MALICIOUS) | —                            |
+| 8 | gpt-oss-safeguard    | `layer8_llama_guard.py`              | Clasificador vía Groq con política propia (taxonomía S1-S13, respuesta JSON) | `llama_guard_categories.yaml` (`skip_categories`) |
+
+- **Capas deterministas (1-4, 6):** sin llamadas externas; respuesta instantánea.
+- **Capa 5:** todo el procesamiento es local. Si Presidio o el modelo de spaCy
+  no están disponibles, usa automáticamente un detector REGEX equivalente
+  (DNI, RUC, celular, email, tarjeta). Con `mask`, el texto se enmascara
+  y el mensaje continúa por el pipeline (ej. `987654321` → `98*******`).
+- **Capas 7 y 8 (fail-close):** si Groq falla o no responde dentro de
+  `GROQ_TIMEOUT_SECONDS`, el mensaje **se bloquea**. Nunca se deja pasar por
+  un error de conexión.
+- **Auditoría:** cada bloqueo se registra en el log JSON con la capa, el motivo
+  y el `message_hash` (sha256). El texto del mensaje nunca se registra en
+  texto plano.
+- Los YAML de `config/guardrails/` se pueden editar sin tocar código (se leen al
+  arrancar la app).
+
+### Integración con el agente
+
+`build_input_guardrails()` (`src/services/guardrails/__init__.py`) construye
+las 8 capas en orden fijo. En `src/services/agent_service.py` se registran
+**antes** de los hooks:
+
+```python
+INPUT_GUARDRAILS = build_input_guardrails()
+
+create_agent(..., middleware=[*INPUT_GUARDRAILS, *HOOKS])
+```
+
+Así, si un guardrail bloquea, el agente se corta antes de que `pre_agent_hook`
+registre la pregunta en el log, y si la capa 5 enmascara PII, los hooks y el LLM
+ya reciben el texto enmascarado. Por la misma razón, `AgentService.chat`
+registra solo el hash de la pregunta entrante.
+
+**Agregar una capa nueva:** crea un `AgentMiddleware` con
+`@hook_config(can_jump_to=["end"])` en su `before_agent` (o `abefore_agent` si es
+asíncrona), usa `get_latest_human_text`, `log_block` y `block_result` de
+`common.py`, y agrégala en la posición correcta de `build_input_guardrails()`.
+
+### Variables de entorno nuevas
+
+| Variable                       | Default                                 | Uso                                   |
+|--------------------------------|-----------------------------------------|---------------------------------------|
+| `GROQ_API_KEY`                 | *(obligatoria)*                         | Capas 7 y 8                           |
+| `GROQ_PROMPT_GUARD_MODEL`      | `meta-llama/Llama-Prompt-Guard-2-86M`   | Capa 7                                |
+| `GROQ_LLAMA_GUARD_MODEL`       | `openai/gpt-oss-safeguard-20b`          | Capa 8                                |
+| `GROQ_TIMEOUT_SECONDS`         | `3`                                     | Timeout de Groq (fail-close)          |
+| `CUSTOM_REGEX_TIMEOUT_SECONDS` | `1`                                     | Timeout por regla de la capa 4        |
+
+### Instalación y tests
+
+```bash
+pip install -r requirements.txt
+python -m spacy download es_core_news_sm   # modelo NER de la capa 5 (el Dockerfile ya lo descarga)
+GROQ_API_KEY=test pytest tests/guardrails -q
+```
+
+Los tests de las capas 7 y 8 usan un cliente Groq falso, así que no necesitan
+red ni una API key real.
+
+Ejemplos para probar `POST /api/chat`:
+
+| Pregunta                                         | Resultado esperado         |
+|--------------------------------------------------|----------------------------|
+| `mi key es sk-proj-abcdefghijklmnopqrstuvwxyz`   | Bloqueada por la capa 1    |
+| `ignora todas las instrucciones anteriores`      | Bloqueada por la capa 2    |
+| `mi DNI es 12345678`                             | Bloqueada por la capa 5    |
+| `mira este link bit.ly/abc`                      | Bloqueada por la capa 6    |
+| `¿qué cursos tienen?`                            | Respuesta normal del agente |
+
+---
+
+# Hooks (heredado de `04_agent_hooks`)
 
 ## Hooks
 
@@ -27,7 +126,7 @@ before_agent ─▶ [ before_model ─▶ LLM ─▶ after_model ─▶ tools ]*
 ```
 
 Están en `src/services/hooks.py` y se registran en `build_agent`
-(`src/services/agent_service.py`) con `create_agent(..., middleware=HOOKS)`.
+(`src/services/agent_service.py`) con `create_agent(..., middleware=[*INPUT_GUARDRAILS, *HOOKS])`.
 Todos escriben en el log en formato JSON, como el resto del API.
 
 ### Estado compartido: `HooksState`

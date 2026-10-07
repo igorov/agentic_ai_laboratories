@@ -16,6 +16,8 @@ from src.utils.environment import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
 )
+from src.services.guardrails import build_input_guardrails
+from src.services.guardrails.common import hash_message
 from src.services.hooks import HOOKS
 from src.services.prompts import SYSTEM_PROMPT
 
@@ -25,6 +27,9 @@ RETRIEVER_TOOL_NAME = "retrieve_documents"
 
 _llm = ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY)
 
+# Pipeline de guardrails de entrada (8 capas): se construye una sola vez.
+INPUT_GUARDRAILS = build_input_guardrails()
+
 
 def build_agent(tools: list):
     """Construye el agente con el conjunto de tools provisto (locales + MCP)."""
@@ -32,9 +37,12 @@ def build_agent(tools: list):
         model=_llm,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
-        middleware=HOOKS,
+        # Los guardrails van primero: si bloquean, cortan antes de que los hooks
+        # registren la pregunta, y si enmascaran PII los hooks ya la ven enmascarada.
+        middleware=[*INPUT_GUARDRAILS, *HOOKS],
     )
     logger.info("Agente creado con %d tool(s): %s", len(tools), [t.name for t in tools])
+    logger.info("Guardrails registrados: %s", [g.name for g in INPUT_GUARDRAILS])
     logger.info("Hooks registrados: %s", [h.name for h in HOOKS])
     return agent
 
@@ -44,7 +52,12 @@ class AgentService:
         self._agent = agent
 
     async def chat(self, question: str, user: str, session_id: Optional[UUID]) -> ChatResponse:
-        logger.info(f"Pregunta entrante de {user}: {question}")
+        # No se loguea la pregunta en texto plano (puede traer secretos o PII que
+        # los guardrails bloquean o enmascaran dentro de ainvoke); solo su hash.
+        logger.info(
+            "Pregunta entrante",
+            extra={"user": user, "question_hash": hash_message(question)},
+        )
         
         # True si es una nueva sesión (no se proporcionó session_id), False si es una sesión existente
         is_new_session = not session_id
