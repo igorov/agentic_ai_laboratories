@@ -1,0 +1,10 @@
+langchain_openai
+langchain-qdrant
+qdrant-client
+langchain
+langchain_openai
+pandas
+groq
+regex
+python-dotenv
+jupyter
