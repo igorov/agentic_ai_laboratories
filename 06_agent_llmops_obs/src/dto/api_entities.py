@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 class ChatRequest(BaseModel):
     question: str
@@ -24,6 +24,8 @@ class HistoryItem(BaseModel):
     user: Optional[str] = None
     retrieved_contexts: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
+    is_ok: Optional[bool] = None
+    feedback_comment: Optional[str] = None
 
     @field_validator("retrieved_contexts", mode="before")
     @classmethod
@@ -38,3 +40,20 @@ class HistoryItem(BaseModel):
 class UserSessionsResponse(BaseModel):
     user: str
     sessions: List[str]
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: UUID
+    is_ok: bool
+    comment: Optional[str] = Field(default=None, max_length=2000)
+
+class FeedbackResponse(BaseModel):
+    trace_id: UUID
+    is_ok: bool
+    comment: Optional[str] = None
+
+class HealthResponse(BaseModel):
+    status: str
+    prompt_version: str
+    model: str
+    app_version: str

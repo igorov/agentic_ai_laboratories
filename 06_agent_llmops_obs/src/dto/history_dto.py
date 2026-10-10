@@ -15,6 +15,9 @@ class HistoryDTO(BaseModel):
     output_tokens: Optional[int] = None
     retrieved_contexts: Optional[str] = None
     created_at: Optional[datetime] = None
+    is_ok: Optional[bool] = None
+    feedback_comment: Optional[str] = None
+    feedback_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -14,3 +14,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 *.log
+
+# LLMOps
+evals/results.json
+loadtest/reports/

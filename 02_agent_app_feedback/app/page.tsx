@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from './_lib/auth-context'
-import { getSessions, getHistory, sendMessage, type HistoryItem } from './_lib/api-client'
+import { getSessions, getHistory, sendMessage, sendFeedback, type HistoryItem } from './_lib/api-client'
 import ChatArea from './_components/ChatArea'
 
 export default function HomePage() {
@@ -105,6 +105,26 @@ export default function HomePage() {
     }
   }
 
+  async function handleFeedback(traceId: string, isOk: boolean) {
+    if (!token) return
+
+    const previous = history.find((item) => item.trace_id === traceId)?.is_ok ?? null
+    if (previous === isOk) return
+
+    // Actualización optimista: se marca el botón y se revierte si la API falla.
+    const setIsOk = (value: boolean | null) =>
+      setHistory((prev) => prev.map((item) => (item.trace_id === traceId ? { ...item, is_ok: value } : item)))
+
+    setIsOk(isOk)
+    setSendError(null)
+    try {
+      await sendFeedback({ trace_id: traceId, is_ok: isOk }, token)
+    } catch {
+      setIsOk(previous)
+      setSendError('No se pudo registrar tu valoración. Intentá de nuevo.')
+    }
+  }
+
   function handleNewSession() {
     setActiveSession(null)
     setSessionRef(null)
@@ -178,6 +198,7 @@ export default function HomePage() {
           history={history}
           loading={loadingHistory}
           activeSession={activeSession}
+          onFeedback={handleFeedback}
         />
 
         <div className="border-t border-zinc-200 bg-white px-4 py-3">

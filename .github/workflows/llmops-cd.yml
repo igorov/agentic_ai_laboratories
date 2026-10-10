@@ -1,0 +1,174 @@
+# CD de 06_agent_llmops_obs a GCP Cloud Run con canary y rollback automático.
+#
+# Se dispara cuando llmops-ci termina OK en un push a main (o a mano).
+#   1. Auth en GCP con Workload Identity Federation (sin llaves JSON).
+#   2. Build + push de la imagen a Artifact Registry (tag = commit).
+#   3. Deploy de la revisión nueva SIN tráfico, con el tag "canary".
+#   4. Smoke test contra la URL del tag (producción no se entera).
+#   5. Canary: 10% del tráfico por CANARY_MINUTES; si la revisión nueva
+#      tiene más de MAX_5XX errores 5xx → rollback al 100% de la anterior.
+#   6. Promoción al 100%.
+# Configuración y llaves necesarias: 06_agent_llmops_obs/docs/cicd.md
+name: llmops-cd
+
+on:
+  workflow_run:
+    workflows: [llmops-ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: llmops-cd
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # necesario para Workload Identity Federation
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  REPOSITORY: ${{ vars.GCP_AR_REPOSITORY }}
+  SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+  RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SA }}
+  CANARY_PERCENT: "10"
+  CANARY_MINUTES: "5"
+  MAX_5XX: "0"
+  # Secretos de Secret Manager que se montan como variables de entorno.
+  # Si no usas Neon, quita NEON_API_KEY de la lista.
+  RUNTIME_SECRETS: >-
+    OPENAI_API_KEY=OPENAI_API_KEY:latest,DATABASE_URL=DATABASE_URL:latest,QDRANT_URL=QDRANT_URL:latest,QDRANT_KEY=QDRANT_KEY:latest,NEON_API_KEY=NEON_API_KEY:latest,GROQ_API_KEY=GROQ_API_KEY:latest,LANGSMITH_API_KEY=LANGSMITH_API_KEY:latest
+
+defaults:
+  run:
+    working-directory: 06_agent_llmops_obs
+
+jobs:
+  deploy:
+    # Solo si el CI pasó en un push a main (no en PRs), o si se lanzó a mano.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build y push de la imagen
+        run: |
+          SHA="$(git rev-parse --short=7 HEAD)"
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}:${SHA}"
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+
+      - name: Revisión actual en producción
+        run: |
+          if gcloud run services describe "${SERVICE}" --region "${REGION}" --format=json > service.json 2>/dev/null; then
+            PREV="$(jq -r '[.status.traffic[] | select(.percent == 100)][0].revisionName // empty' service.json)"
+            echo "SERVICE_EXISTS=true" >> "$GITHUB_ENV"
+            echo "PREV=${PREV}" >> "$GITHUB_ENV"
+            echo "Revisión en producción: ${PREV}"
+          else
+            echo "SERVICE_EXISTS=false" >> "$GITHUB_ENV"
+            echo "El servicio no existe: primer despliegue."
+          fi
+
+      - name: Deploy de la revisión nueva
+        run: |
+          FLAGS=(
+            --image "${IMAGE}"
+            --region "${REGION}"
+            --platform managed
+            --allow-unauthenticated
+            --port 8080
+            --service-account "${RUNTIME_SA}"
+            --env-vars-file deploy/cloudrun.env.yaml
+            --set-secrets "${RUNTIME_SECRETS}"
+            --concurrency 20
+            --min-instances 0
+            --max-instances 5
+            --memory 2Gi
+            --cpu 1
+            --timeout 120
+          )
+          if [[ "${SERVICE_EXISTS}" == "true" && -n "${PREV}" ]]; then
+            # Revisión nueva sin tráfico, accesible solo por la URL del tag.
+            gcloud run deploy "${SERVICE}" "${FLAGS[@]}" --no-traffic --tag canary
+          else
+            gcloud run deploy "${SERVICE}" "${FLAGS[@]}"
+          fi
+
+          gcloud run services describe "${SERVICE}" --region "${REGION}" --format=json > service.json
+          NEW="$(jq -r '.status.latestCreatedRevisionName' service.json)"
+          URL="$(jq -r '.status.url' service.json)"
+          CANARY_URL="$(jq -r '[.status.traffic[] | select(.tag == "canary")][0].url // empty' service.json)"
+          echo "NEW=${NEW}" >> "$GITHUB_ENV"
+          echo "URL=${URL}" >> "$GITHUB_ENV"
+          echo "CANARY_URL=${CANARY_URL:-$URL}" >> "$GITHUB_ENV"
+          echo "Revisión nueva: ${NEW}"
+
+      - name: Smoke test
+        run: |
+          if ! scripts/smoke_test.sh "${CANARY_URL}"; then
+            if [[ "${SERVICE_EXISTS}" == "true" && -n "${PREV}" ]]; then
+              echo "::error::Smoke test falló: la revisión ${NEW} nunca recibió tráfico de producción."
+              gcloud run services update-traffic "${SERVICE}" --region "${REGION}" --remove-tags canary
+            else
+              echo "::error::Smoke test falló en el primer despliegue."
+            fi
+            exit 1
+          fi
+
+      - name: Canary y promoción
+        if: env.SERVICE_EXISTS == 'true' && env.PREV != ''
+        run: |
+          REST=$((100 - CANARY_PERCENT))
+          gcloud run services update-traffic "${SERVICE}" --region "${REGION}" \
+            --to-revisions "${NEW}=${CANARY_PERCENT},${PREV}=${REST}"
+          START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Canary: ${NEW}=${CANARY_PERCENT}% durante ${CANARY_MINUTES} min (desde ${START})"
+          sleep $((CANARY_MINUTES * 60))
+
+          FILTER="resource.type=\"cloud_run_revision\"
+            AND resource.labels.service_name=\"${SERVICE}\"
+            AND resource.labels.revision_name=\"${NEW}\"
+            AND httpRequest.status>=500
+            AND timestamp>=\"${START}\""
+          ERRORS="$(gcloud logging read "${FILTER}" --limit 1000 --format 'value(timestamp)' | wc -l)"
+          echo "Errores 5xx de ${NEW} durante el canary: ${ERRORS} (máximo ${MAX_5XX})"
+
+          if (( ERRORS > MAX_5XX )); then
+            echo "::error::Canary fallido: rollback a ${PREV}"
+            gcloud run services update-traffic "${SERVICE}" --region "${REGION}" --to-revisions "${PREV}=100"
+            gcloud run services update-traffic "${SERVICE}" --region "${REGION}" --remove-tags canary
+            exit 1
+          fi
+
+          gcloud run services update-traffic "${SERVICE}" --region "${REGION}" --to-latest
+          gcloud run services update-traffic "${SERVICE}" --region "${REGION}" --remove-tags canary
+          echo "Revisión ${NEW} promovida al 100%"
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Deploy ${SERVICE}"
+            echo "- Imagen: \`${IMAGE:-n/a}\`"
+            echo "- Revisión nueva: \`${NEW:-n/a}\`"
+            echo "- Revisión anterior: \`${PREV:-n/a}\`"
+            echo "- URL: ${URL:-n/a}"
+          } >> "$GITHUB_STEP_SUMMARY"

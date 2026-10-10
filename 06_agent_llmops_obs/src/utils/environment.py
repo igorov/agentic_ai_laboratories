@@ -36,3 +36,14 @@ GROQ_TIMEOUT_SECONDS: float = config("GROQ_TIMEOUT_SECONDS", default=3, cast=flo
 
 # Guardrails — Capa 4 (timeout anti-ReDoS por regla, en segundos)
 CUSTOM_REGEX_TIMEOUT_SECONDS: float = config("CUSTOM_REGEX_TIMEOUT_SECONDS", default=1, cast=float)
+
+# Prompts versionados: archivo prompts/system/{PROMPT_VERSION}.md
+PROMPT_VERSION: str = config("PROMPT_VERSION", default="v1")
+
+# LangSmith (tracing + feedback). El SDK lee LANGSMITH_* desde os.environ.
+LANGSMITH_TRACING: bool = config("LANGSMITH_TRACING", default=False, cast=bool)
+LANGSMITH_API_KEY: str = config("LANGSMITH_API_KEY", default=None)
+LANGSMITH_PROJECT: str = config("LANGSMITH_PROJECT", default="agent-llmops-obs")
+
+# Versión desplegada: Cloud Run expone K_REVISION en cada revisión.
+APP_VERSION: str = config("K_REVISION", default="local")

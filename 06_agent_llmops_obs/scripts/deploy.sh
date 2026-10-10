@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Despliegue de assistant_base_01 en GCP Cloud Run (Linux / macOS)
+# Despliegue de 06_agent_llmops_obs en GCP Cloud Run (Linux / macOS)
 #
 # Requisitos previos:
 #   - gcloud ya autenticado (gcloud auth login) y con permisos.
@@ -18,7 +18,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 REGION="us-central1"                 # Region de GCP
 REPOSITORY="agentic-ai"              # Nombre del repositorio en Artifact Registry
-SERVICE="assistant-base-01"          # Nombre del servicio (y de la imagen)
+SERVICE="agent-llmops-obs"          # Nombre del servicio (y de la imagen)
 PROJECT_ID="mi-proyecto-gcp"         # ID del proyecto de GCP
 
 # Version generada segun el dia y la hora: YYYYMMDD-HHMMSS
@@ -28,7 +28,7 @@ VERSION="$(date +%Y%m%d-%H%M%S)"
 # Rutas
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"          # carpeta assistant_base_01 (contexto de build)
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"          # carpeta 06_agent_llmops_obs (contexto de build)
 ENV_FILE="$ROOT_DIR/.env"
 
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${SERVICE}"

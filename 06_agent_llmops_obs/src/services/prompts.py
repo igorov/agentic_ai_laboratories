@@ -1,4 +1,11 @@
-from src.utils.environment import NEON_PROJECT_ID
+from pathlib import Path
+
+from src.utils.environment import NEON_PROJECT_ID, PROMPT_VERSION
+
+# Prompts versionados: el texto del system prompt vive en
+# prompts/system/{PROMPT_VERSION}.md. Para cambiarlo se crea un archivo nuevo
+# (v2.md, ...) y se sube PROMPT_VERSION; el PR dispara el prompt CI (evals).
+PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts" / "system"
 
 _neon_context = (
     f"Tienes acceso a una base de datos Neon Postgres. "
@@ -15,25 +22,16 @@ _neon_context = (
     f"información institucional, usa retrieve_documents en lugar de run_sql. "
 ) if NEON_PROJECT_ID else ""
 
-_skills_context = (
-    "Tienes skills con procedimientos especializados de la academia (por ejemplo, "
-    "matrícula o solicitud de certificados y constancias). Cuando el usuario quiera "
-    "hacer un trámite o generar un documento de la academia, primero usa list_skills "
-    "para ver las skills disponibles, luego usa load_skill con la skill que corresponda "
-    "y sigue sus instrucciones al pie de la letra. Si la conversación continúa un "
-    "trámite en curso, vuelve a llamar a load_skill en cada turno, porque las "
-    "instrucciones cargadas antes no se conservan en el historial. "
-)
 
-SYSTEM_PROMPT = (
-    "Eres un asistente útil y amigable. Responde siempre en español. "
-    "Sé conciso en tus respuestas. "
-    "SIEMPRE que la pregunta trate sobre la academia, sus programas, cursos, "
-    "temarios, precios, duración, requisitos, certificaciones o cualquier "
-    "información institucional, DEBES usar la herramienta retrieve_documents "
-    "para consultar la base de conocimiento antes de responder; no respondas "
-    "esos temas de memoria. Si la herramienta no encuentra información "
-    "relevante, dilo explícitamente en tu respuesta. "
-    + _skills_context
-    + _neon_context
-)
+
+def load_system_prompt(version: str = PROMPT_VERSION) -> str:
+    """Carga el system prompt de la versión indicada e inyecta el contexto de Neon."""
+    path = PROMPTS_DIR / f"{version}.md"
+    if not path.exists():
+        raise FileNotFoundError(f"No existe el prompt versionado: {path}")
+    template = path.read_text(encoding="utf-8").strip()
+    # replace (no format) para que las llaves del markdown no rompan la plantilla.
+    return template.replace("{neon_context}", _neon_context).strip()
+
+
+SYSTEM_PROMPT = load_system_prompt()

@@ -1,0 +1,54 @@
+# Integration CI de 06_agent_llmops_obs: lint (errores graves) + tests unitarios.
+# Corre en cada PR y en cada push a main que toque el servicio. Si pasa en main,
+# dispara el CD (llmops-cd.yml vía workflow_run).
+name: llmops-ci
+
+on:
+  pull_request:
+    paths:
+      - "06_agent_llmops_obs/**"
+      - ".github/workflows/llmops-*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "06_agent_llmops_obs/**"
+      - ".github/workflows/llmops-*.yml"
+
+concurrency:
+  group: llmops-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: 06_agent_llmops_obs
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Valores dummy: los tests no llaman a OpenAI, Qdrant, Groq ni LangSmith.
+      OPENAI_API_KEY: test
+      QDRANT_URL: http://localhost:6333
+      QDRANT_KEY: test
+      QDRANT_COLLECTION_NAME: test
+      GROQ_API_KEY: test
+      LANGSMITH_TRACING: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: 06_agent_llmops_obs/requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt ruff
+          python -m spacy download es_core_news_sm
+
+      - name: Lint (solo errores graves)
+        run: ruff check --select E9,F63,F7,F82 src tests evals loadtest
+
+      - name: Tests unitarios
+        run: pytest -q

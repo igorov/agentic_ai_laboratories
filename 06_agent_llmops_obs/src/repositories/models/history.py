@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, func
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase
 
@@ -19,3 +19,6 @@ class History(Base):
     output_tokens = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     retrieved_contexts = Column(Text, nullable=True)
+    is_ok = Column(Boolean, nullable=True)
+    feedback_comment = Column(Text, nullable=True)
+    feedback_at = Column(DateTime, nullable=True)

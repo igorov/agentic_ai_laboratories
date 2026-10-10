@@ -8,9 +8,10 @@ interface ChatAreaProps {
   history: HistoryItem[]
   loading: boolean
   activeSession: string | null
+  onFeedback: (traceId: string, isOk: boolean) => void
 }
 
-export default function ChatArea({ history, loading, activeSession }: ChatAreaProps) {
+export default function ChatArea({ history, loading, activeSession, onFeedback }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -36,7 +37,7 @@ export default function ChatArea({ history, loading, activeSession }: ChatAreaPr
       ) : (
         <div className="flex flex-col gap-6">
           {history.map((item) => (
-            <ChatMessage key={item.trace_id} item={item} />
+            <ChatMessage key={item.trace_id} item={item} onFeedback={onFeedback} />
           ))}
           <div ref={bottomRef} />
         </div>

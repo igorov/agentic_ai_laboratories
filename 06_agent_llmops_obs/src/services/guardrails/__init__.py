@@ -37,6 +37,6 @@ def build_input_guardrails() -> List[AgentMiddleware]:
         CustomRegexMiddleware(),
         PIIGuardrailMiddleware(),
         UrlFilterMiddleware(),
-        PromptGuardMiddleware(),
-        LlamaGuardMiddleware(),
+        #PromptGuardMiddleware(),
+        #LlamaGuardMiddleware(),
     ]

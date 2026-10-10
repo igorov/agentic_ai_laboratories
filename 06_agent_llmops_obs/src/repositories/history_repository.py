@@ -24,3 +24,7 @@ class HistoryRepository(ABC):
     @abstractmethod
     def get_sessions_by_user(self, user: str) -> List[str]:
         raise NotImplementedError
+
+    @abstractmethod
+    def update_feedback(self, trace_id: str, is_ok: bool, comment: Optional[str]) -> Optional[HistoryDTO]:
+        raise NotImplementedError

@@ -140,6 +140,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/InternalErrorResponse"
 
+  /api/feedback:
+    post:
+      summary: Registrar feedback de una respuesta
+      description: |
+        Guarda el feedback del usuario (👍 `is_ok=true` / 👎 `is_ok=false`) en la
+        tabla `history` y lo envía a LangSmith como feedback `user_score`
+        (1 / 0) del trace cuyo `run_id` es el `trace_id`. Si se vuelve a enviar
+        para el mismo `trace_id`, se sobrescribe el valor en la BD.
+      operationId: feedback
+      tags:
+        - feedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeedbackRequest"
+            example:
+              trace_id: "123e4567-e89b-12d3-a456-426614174000"
+              is_ok: false
+              comment: "El precio del programa no es correcto"
+      responses:
+        "200":
+          description: Feedback registrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackResponse"
+        "404":
+          description: No existe una interacción con ese trace_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalErrorResponse"
+        "422":
+          description: Error de validación en el request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+        "500":
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InternalErrorResponse"
+
+  /health:
+    get:
+      summary: Health check
+      description: Estado del servicio, versión del prompt, modelo y revisión desplegada. No consulta BD ni LLM.
+      operationId: health
+      tags:
+        - ops
+      responses:
+        "200":
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
 components:
   schemas:
     ChatRequest:
@@ -231,6 +293,62 @@ components:
           type: string
           format: date-time
           description: Fecha y hora de creación del registro
+        is_ok:
+          type: boolean
+          nullable: true
+          description: Feedback del usuario (true = 👍, false = 👎, null = sin feedback)
+        feedback_comment:
+          type: string
+          nullable: true
+          description: Comentario opcional del feedback
+
+    FeedbackRequest:
+      type: object
+      required:
+        - trace_id
+        - is_ok
+      properties:
+        trace_id:
+          type: string
+          format: uuid
+          description: trace_id devuelto por /api/chat (también es el run_id en LangSmith)
+        is_ok:
+          type: boolean
+          description: true = 👍, false = 👎
+        comment:
+          type: string
+          nullable: true
+          maxLength: 2000
+          description: Comentario opcional
+
+    FeedbackResponse:
+      type: object
+      properties:
+        trace_id:
+          type: string
+          format: uuid
+        is_ok:
+          type: boolean
+        comment:
+          type: string
+          nullable: true
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        prompt_version:
+          type: string
+          example: "v1"
+        model:
+          type: string
+          example: "gpt-4o-mini"
+        app_version:
+          type: string
+          description: Revisión de Cloud Run (K_REVISION) o "local"
+          example: "agent-llmops-obs-00012-abc"
 
     UserSessionsResponse:
       type: object

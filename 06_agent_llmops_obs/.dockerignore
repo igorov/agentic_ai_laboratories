@@ -1,0 +1,21 @@
+# Secretos y entorno local (las variables llegan por Cloud Run / Secret Manager)
+.env
+.env.*
+!.env.example
+
+# Artefactos que no necesita la imagen
+.git
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+tests/
+evals/
+loadtest/
+notebooks/
+presentacion/
+docs/
+scripts/
+deploy/

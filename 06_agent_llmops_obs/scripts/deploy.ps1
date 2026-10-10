@@ -1,5 +1,5 @@
 <#
-    Despliegue de assistant_base_01 en GCP Cloud Run (Windows - PowerShell)
+    Despliegue de 06_agent_llmops_obs en GCP Cloud Run (Windows - PowerShell)
 
     Requisitos previos:
       - gcloud ya autenticado (gcloud auth login) y con permisos.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 $Region     = "us-central1"          # Region de GCP
 $Repository = "agentic-ai"           # Nombre del repositorio en Artifact Registry
-$Service    = "assistant-base-01"    # Nombre del servicio (y de la imagen)
+$Service    = "agent-llmops-obs"    # Nombre del servicio (y de la imagen)
 $ProjectId  = "mi-proyecto-gcp"      # ID del proyecto de GCP
 
 # Version generada segun el dia y la hora: YYYYMMDD-HHMMSS

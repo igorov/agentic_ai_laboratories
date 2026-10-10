@@ -18,6 +18,9 @@ DEFAULT_BLOCK_MESSAGE = (
     "consulta o contacta a soporte si crees que se trata de un error."
 )
 
+# `name` del AIMessage de rechazo: identifica un bloqueo en el trace y en las evals.
+GUARDRAIL_MESSAGE_NAME = "guardrail"
+
 _block_counts_lock = threading.Lock()
 _block_counts: Dict[str, int] = {}
 
@@ -74,7 +77,7 @@ def log_block(
 def block_result(text: str = DEFAULT_BLOCK_MESSAGE) -> Dict[str, Any]:
     """Construye el payload estándar para cortar la ejecución del agente."""
     return {
-        "messages": [{"role": "assistant", "content": text}],
+        "messages": [{"role": "assistant", "content": text, "name": GUARDRAIL_MESSAGE_NAME}],
         "jump_to": "end",
     }
 

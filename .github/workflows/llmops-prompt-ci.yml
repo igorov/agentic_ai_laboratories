@@ -1,0 +1,61 @@
+# Prompt CI: eval gate sobre el golden set cuando un PR cambia prompts, evals
+# o la configuración de los guardrails. Si alguna métrica queda bajo su umbral
+# (evals/thresholds.yaml), el job falla y la branch protection bloquea el merge.
+name: llmops-prompt-ci
+
+on:
+  pull_request:
+    paths:
+      - "06_agent_llmops_obs/prompts/**"
+      - "06_agent_llmops_obs/evals/**"
+      - "06_agent_llmops_obs/config/guardrails/**"
+      - "06_agent_llmops_obs/src/services/prompts.py"
+      - "06_agent_llmops_obs/deploy/cloudrun.env.yaml"
+
+concurrency:
+  group: llmops-prompt-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: 06_agent_llmops_obs
+
+jobs:
+  eval-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_KEY: ${{ secrets.QDRANT_KEY }}
+      QDRANT_COLLECTION_NAME: ${{ secrets.QDRANT_COLLECTION_NAME }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_TRACING: "true"
+      LANGSMITH_PROJECT: agent-llmops-obs-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: 06_agent_llmops_obs/requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          python -m spacy download es_core_news_sm
+
+      - name: Versión del prompt a evaluar
+        # La misma que se desplegará: la de deploy/cloudrun.env.yaml.
+        run: echo "PROMPT_VERSION=$(yq -r .PROMPT_VERSION deploy/cloudrun.env.yaml)" >> "$GITHUB_ENV"
+
+      - name: Eval gate (golden set)
+        run: python evals/run_evals.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: 06_agent_llmops_obs/evals/results.json

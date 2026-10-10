@@ -1,6 +1,6 @@
 @echo off
 REM ===========================================================================
-REM  Despliegue de assistant_base_01 en GCP Cloud Run (Windows - CMD / .bat)
+REM  Despliegue de 06_agent_llmops_obs en GCP Cloud Run (Windows - CMD / .bat)
 REM
 REM  Requisitos previos:
 REM    - gcloud ya autenticado (gcloud auth login) y con permisos.
@@ -18,7 +18,7 @@ REM  Variables de configuracion (edita segun tu entorno)
 REM ---------------------------------------------------------------------------
 set "REGION=us-central1"
 set "REPOSITORY=agentic-ai"
-set "SERVICE=assistant-base-01"
+set "SERVICE=agent-llmops-obs"
 set "PROJECT_ID=mi-proyecto-gcp"
 
 REM Version segun dia y hora: YYYYMMDD-HHMMSS (independiente del locale via wmic)

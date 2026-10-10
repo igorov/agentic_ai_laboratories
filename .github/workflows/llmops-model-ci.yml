@@ -1,0 +1,62 @@
+# Model CI: benchmark de regresión al cambiar de modelo (o de versión/alias).
+# Se lanza a mano desde Actions → llmops-model-ci → Run workflow. El experimento
+# queda en LangSmith para compararlo contra la baseline (Datasets → Experiments
+# → Compare), y el job falla si el modelo no alcanza los umbrales.
+name: llmops-model-ci
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Modelo de OpenAI a evaluar (ej. gpt-4.1-mini)"
+        required: true
+        type: string
+      prompt_version:
+        description: "Versión del prompt (vacío = la de deploy/cloudrun.env.yaml)"
+        required: false
+        type: string
+
+defaults:
+  run:
+    working-directory: 06_agent_llmops_obs
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_KEY: ${{ secrets.QDRANT_KEY }}
+      QDRANT_COLLECTION_NAME: ${{ secrets.QDRANT_COLLECTION_NAME }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_TRACING: "true"
+      LANGSMITH_PROJECT: agent-llmops-obs-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: 06_agent_llmops_obs/requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          python -m spacy download es_core_news_sm
+
+      - name: Benchmark del modelo
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_PROMPT_VERSION: ${{ inputs.prompt_version }}
+        run: |
+          PROMPT_VERSION="${INPUT_PROMPT_VERSION:-$(yq -r .PROMPT_VERSION deploy/cloudrun.env.yaml)}"
+          python evals/run_evals.py --model "$INPUT_MODEL" --prompt-version "$PROMPT_VERSION"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: model-benchmark-${{ inputs.model }}
+          path: 06_agent_llmops_obs/evals/results.json

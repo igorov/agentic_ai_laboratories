@@ -52,6 +52,17 @@ class HistoryRepositoryImpl(HistoryRepository):
         )
         return [row.session_id for row in rows]
 
+    def update_feedback(self, trace_id: str, is_ok: bool, comment: Optional[str]) -> Optional[HistoryDTO]:
+        model = self.db.query(History).filter(History.trace_id == trace_id).first()
+        if model is None:
+            return None
+        model.is_ok = is_ok
+        model.feedback_comment = comment
+        model.feedback_at = func.now()
+        self.db.commit()
+        self.db.refresh(model)
+        return self._to_dto(model)
+
     def _to_dto(self, history: History) -> HistoryDTO:
             return HistoryDTO.model_validate(history)
     

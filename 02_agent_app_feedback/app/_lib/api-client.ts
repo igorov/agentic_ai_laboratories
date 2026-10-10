@@ -34,6 +34,7 @@ export interface HistoryItem {
   user: string | null
   created_at: string
   is_ok: boolean | null
+  feedback_comment?: string | null
 }
 
 export function getHistory(sessionId: string, token: string): Promise<HistoryItem[]> {
@@ -60,3 +61,21 @@ export function sendMessage(request: ChatRequest, token: string): Promise<ChatRe
   })
 }
 
+export interface FeedbackRequest {
+  trace_id: string
+  is_ok: boolean
+  comment?: string
+}
+
+export interface FeedbackResponse {
+  trace_id: string
+  is_ok: boolean
+  comment: string | null
+}
+
+export function sendFeedback(request: FeedbackRequest, token: string): Promise<FeedbackResponse> {
+  return apiFetch<FeedbackResponse>('/api/feedback', token, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}

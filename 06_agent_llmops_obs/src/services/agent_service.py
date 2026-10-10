@@ -12,14 +12,17 @@ import json
 
 from src.utils.logger import get_logger
 from src.utils.environment import (
+    APP_VERSION,
     HISTORY_LIMIT,
     OPENAI_API_KEY,
     OPENAI_MODEL,
+    PROMPT_VERSION,
 )
 from src.services.guardrails import build_input_guardrails
 from src.services.guardrails.common import hash_message
 from src.services.hooks import HOOKS
 from src.services.prompts import SYSTEM_PROMPT
+from src.services.tracing import get_tracing_callbacks
 
 logger = get_logger(__name__)
 
@@ -74,14 +77,31 @@ class AgentService:
             history_messages.append(HumanMessage(content=record.question))
             history_messages.append(AIMessage(content=record.answer))
 
+        # El trace_id se genera antes de invocar al agente y se usa como run_id
+        # del trace en LangSmith: el mismo id queda en la respuesta, en la BD y
+        # en LangSmith, y es el que se usa luego para registrar el feedback.
+        trace_id = uuid4()
+
         agent_response = await self._agent.ainvoke(
-            {"messages": [*history_messages, HumanMessage(content=question)]}
+            {"messages": [*history_messages, HumanMessage(content=question)]},
+            config={
+                "run_id": trace_id,
+                "run_name": "chat_request",
+                "callbacks": get_tracing_callbacks(),
+                "tags": ["agent-llmops-obs", PROMPT_VERSION],
+                "metadata": {
+                    "session_id": str(session_id),
+                    "user": user,
+                    "is_new_session": is_new_session,
+                    "prompt_version": PROMPT_VERSION,
+                    "model": OPENAI_MODEL,
+                    "app_version": APP_VERSION,
+                },
+            },
         )
         result = self._parse_agent_response(agent_response)
         retrieved_contexts = self._extract_retrieved_contexts(agent_response)
 
-        trace_id = uuid4()
-        
         # Guardar la interacción en la base de datos
         # Guardar el historial de la conversación en la base de datos
         historyDTO = HistoryDTO(

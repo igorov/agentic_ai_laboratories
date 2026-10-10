@@ -1,12 +1,117 @@
-# 05_agent_guardrails
+# 06_agent_llmops_obs
 
-Backend del curso **Agentes de IA** que extiende `04_agent_hooks` (agente con
-tools locales, retrieval en Qdrant, MCP de Neon, skills y hooks) con
-**guardrails de entrada**: un pipeline de 8 capas de seguridad que valida cada
-mensaje del usuario **antes** de que llegue al agente, usando el *middleware*
-de LangChain.
+Backend del curso **Agentes de IA** que extiende `05_agent_guardrails` (agente
+con tools locales, retrieval en Qdrant, MCP de Neon, skills, hooks y 8 capas de
+guardrails) con **LLMOps y observabilidad**: tracing con LangSmith, feedback
+humano, prompts versionados con evaluación offline, CI/CD con canary en Cloud
+Run, prueba de carga y SLOs.
 
 ---
+
+# LLMOps & Observabilidad
+
+```
+ Development ──▶ Evaluation ──▶ Staging/Canary ──▶ Production ──▶ Monitoring
+ prompts/        evals/          llmops-cd.yml      Cloud Run       LangSmith
+ system/v1.md    golden set      smoke + 10%        autoscaling     traces, costo,
+                 eval gate (PR)  rollback auto                      online evals, 👍/👎
+      ▲                                                                 │
+      └──────────────── feedback negativo → golden set ◀────────────────┘
+```
+
+| Pieza | Dónde | Documentación |
+|---|---|---|
+| Tracing (traces, spans, tokens, costo) | `src/services/tracing.py`, `AgentService.chat` | abajo |
+| Feedback humano 👍/👎 | `POST /api/feedback`, columnas `is_ok` en `history` | abajo |
+| Prompts versionados | `prompts/system/{PROMPT_VERSION}.md` | abajo |
+| Evaluación offline (eval gate) | `evals/` | abajo |
+| CI/CD (prompt, model e integration CI + canary) | `.github/workflows/llmops-*.yml` | [docs/cicd.md](docs/cicd.md) |
+| Prueba de carga | `loadtest/` | [loadtest/README.md](loadtest/README.md) |
+| SLOs y error budget | — | [docs/slos.md](docs/slos.md) |
+| Online evals y feedback loop | UI de LangSmith | [docs/online_evals.md](docs/online_evals.md) |
+
+## Tracing con LangSmith
+
+Con `LANGSMITH_TRACING=true` y `LANGSMITH_API_KEY`, cada `POST /api/chat`
+genera un trace `chat_request` en el proyecto `LANGSMITH_PROJECT`:
+
+```
+chat_request (run_id = trace_id de la respuesta)
+├── SecretKeysMiddleware.before_agent … LlamaGuardMiddleware.before_agent   # 8 guardrails
+├── pre_agent_hook / pre_model_hook
+├── model (ChatOpenAI)          ← tokens de entrada/salida y costo
+├── tools (retrieve_documents, load_skill, run_sql, …)
+├── post_model_hook / post_agent_hook
+```
+
+- El `trace_id` se genera **antes** de invocar al agente y se pasa como
+  `run_id`: es el mismo en la respuesta de la API, en la tabla `history` y en
+  LangSmith.
+- Metadata de cada trace: `session_id` (LangSmith agrupa la conversación en
+  *Threads*), `user`, `prompt_version`, `model`, `app_version` (revisión de
+  Cloud Run) e `is_new_session`.
+- **PII**: el cliente de LangSmith usa un *anonymizer* con las REGEX de las
+  capas 1 y 5 de los guardrails. Secretos, emails, tarjetas, RUC, celulares y
+  DNI salen del servicio como `<SECRET>`, `<EMAIL>`, `<CREDIT_CARD>`, `<RUC>`,
+  `<PHONE>` y `<DNI>`, incluso en los mensajes que un guardrail bloqueó.
+- Los mensajes de bloqueo de los guardrails llevan `name="guardrail"`: se
+  distinguen en el trace y las evals los detectan.
+
+## Feedback humano
+
+```http
+POST /api/feedback
+{ "trace_id": "…", "is_ok": false, "comment": "El precio no es correcto" }
+```
+
+1. Guarda `is_ok`, `feedback_comment` y `feedback_at` en `history` (404 si el
+   `trace_id` no existe). La BD es la fuente de verdad.
+2. Envía el feedback `user_score` (1 = 👍, 0 = 👎) al trace en LangSmith. Si
+   LangSmith falla, solo se registra un warning.
+
+`GET /api/history/{session_id}` devuelve `is_ok` y `feedback_comment`, así el
+frontend (`02_agent_app_feedback`) muestra el voto al recargar.
+
+Para una tabla `history` ya existente, ejecuta los `ALTER TABLE` del final de
+`setup/database_history.sql`.
+
+## Prompts versionados
+
+El system prompt vive en `prompts/system/{PROMPT_VERSION}.md` (el contexto de
+Neon se inyecta en `{neon_context}`). Para cambiarlo:
+
+1. Crea `prompts/system/v2.md` (no edites `v1.md`: es la baseline).
+2. Sube `PROMPT_VERSION` en `.env` y en `deploy/cloudrun.env.yaml`.
+3. Abre un PR: el **prompt CI** corre el eval gate con la versión nueva.
+
+## Evaluación offline
+
+```bash
+python evals/run_evals.py                       # prompt y modelo del .env
+python evals/run_evals.py --prompt-version v2   # probar otro prompt
+python evals/run_evals.py --model gpt-4.1-mini  # probar otro modelo
+```
+
+- `evals/datasets/golden_set.jsonl`: 26 casos (RAG, bloqueos de guardrails,
+  skills y fuera de alcance). Se sincroniza como dataset
+  `agent-llmops-obs-golden` en LangSmith.
+- Evaluadores (`evals/evaluators.py`):
+
+  | Métrica | Tipo | Qué verifica |
+  |---|---|---|
+  | `guardrail_behavior` | determinista | Bloquea lo que debe y deja pasar lo legítimo |
+  | `tool_selection` | determinista | Llamó a la tool esperada |
+  | `correctness` | LLM-as-judge | La respuesta coincide con la referencia |
+  | `groundedness` | LLM-as-judge | La respuesta está respaldada por los contextos recuperados |
+
+- `evals/thresholds.yaml`: umbrales del gate. Si alguna métrica queda por
+  debajo, el script termina con **exit 1** y el PR queda bloqueado.
+- Cada ejecución es un experimento en LangSmith
+  (`<prompt>-<modelo>-<commit>`), comparable contra los anteriores.
+
+---
+
+# Guardrails (heredado de `05_agent_guardrails`)
 
 ## Guardrails
 
@@ -289,6 +394,9 @@ contexto con Qdrant, etc.).
 | Logging           | python-json-logger (logs en JSON)   |
 | LLM / Vector DB   | OpenAI · Qdrant *(se integra durante el curso)* |
 | Despliegue        | Docker + GCP Cloud Run              |
+| Observabilidad    | LangSmith (tracing, feedback, evals)  |
+| CI/CD             | GitHub Actions (WIF → Cloud Run)    |
+| Carga             | Locust                              |
 
 ---
 
@@ -317,6 +425,8 @@ Endpoints expuestos:
 | `POST` | `/api/chat`                | Envía una pregunta y obtiene la respuesta.   |
 | `GET`  | `/api/history/{session_id}`| Devuelve el historial de una sesión.         |
 | `GET`  | `/api/sessions/{user}`     | Lista las sesiones de un usuario.            |
+| `POST` | `/api/feedback`            | Registra 👍/👎 de una respuesta (BD + LangSmith). |
+| `GET`  | `/health`                  | Estado, versión del prompt, modelo y revisión. |
 
 ### 2. Controllers — `src/controllers/`
 Orquestan cada caso de uso: validan la entrada, **instancian el repositorio y
@@ -325,6 +435,7 @@ errores a respuestas HTTP (`HTTPException` 422 / 500).
 
 - `chat_controller.py` → `handle_chat(...)`
 - `history_controller.py` → `handle_get_history(...)`, `handle_get_sessions_by_user(...)`
+- `feedback_controller.py` → `handle_feedback(...)`
 
 ### 3. Services — `src/services/`
 Contienen la **lógica de negocio**. Reciben un repositorio por constructor y no
@@ -379,6 +490,9 @@ Cada interacción se guarda en la tabla `history`:
 | `output_tokens`      | Integer     | Tokens de salida (opcional)    |
 | `retrieved_contexts` | Text        | Contexto recuperado (RAG)      |
 | `created_at`         | DateTime    | Fecha/hora de la interacción   |
+| `is_ok`              | Boolean     | Feedback: true 👍, false 👎, null sin voto |
+| `feedback_comment`   | Text        | Comentario opcional del feedback |
+| `feedback_at`        | DateTime    | Fecha/hora del último feedback |
 
 ---
 
@@ -393,7 +507,16 @@ OPENAI_API_KEY=
 QDRANT_URL=
 QDRANT_KEY=
 QDRANT_COLLECTION_NAME=
+GROQ_API_KEY=
+
+# LLMOps
+PROMPT_VERSION=v1
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=agent-llmops-obs
 ```
+
+La lista completa está en `.env.example`.
 
 ---
 
@@ -412,13 +535,17 @@ El servicio queda disponible en `http://localhost:8080`
 ### Con Docker
 
 ```bash
-docker build -t assistant-base-01 .
-docker run --name assistant-base-01 -p 8080:8080 --env-file .env assistant-base-01
+docker build -t agent-llmops-obs .
+docker run --name agent-llmops-obs -p 8080:8080 --env-file .env agent-llmops-obs
 ```
 
 ---
 
 ## Despliegue en GCP Cloud Run
+
+El despliegue a producción lo hace el **CD con GitHub Actions** (canary +
+rollback): ver [docs/cicd.md](docs/cicd.md). Los scripts manuales siguen
+disponibles para pruebas.
 
 En `scripts/` hay scripts que automatizan todo el flujo (construir imagen →
 push al Artifact Registry → deploy en Cloud Run, leyendo las variables del
@@ -449,12 +576,19 @@ powershell -ExecutionPolicy Bypass -File .\deploy.ps1
 ## Estructura del proyecto
 
 ```
-assistant_base_01/
+06_agent_llmops_obs/
 ├── Dockerfile
 ├── requirements.txt
 ├── .env.example
+├── config/guardrails/    # configuración versionada de los guardrails
+├── deploy/               # cloudrun.env.yaml (variables no secretas de Cloud Run)
+├── docs/                 # cicd.md, slos.md, online_evals.md
+├── evals/                # golden set, evaluadores, umbrales y run_evals.py
+├── loadtest/             # prueba de carga con Locust
 ├── notebooks/            # laboratorios por sesión (Jupyter)
-├── scripts/              # despliegue a Cloud Run (sh / ps1 / bat)
+├── prompts/system/       # system prompt versionado (v1.md, …)
+├── scripts/              # deploy manual, setup de GCP para CI/CD, smoke test
+├── tests/                # pytest (guardrails, feedback, prompts, tracing)
 └── src/
     ├── main.py           # arranque de la app FastAPI
     ├── routes/           # definición de endpoints
